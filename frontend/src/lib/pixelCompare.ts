@@ -119,7 +119,12 @@ function normalizeToSameSize(
 
   const canvasA = document.createElement('canvas');
   canvasA.width = w; canvasA.height = h;
-  canvasA.getContext('2d')!.putImageData(new ImageData(a.data, a.width, a.height), 0, 0);
+  const ctxA = canvasA.getContext('2d')!;
+  // Some TS lib.dom versions don't include the `ImageData(Uint8ClampedArray, w, h)` overload.
+  // Create by (w, h) and copy pixel data explicitly.
+  const imageDataA = new ImageData(w, h);
+  imageDataA.data.set(a.data);
+  ctxA.putImageData(imageDataA, 0, 0);
 
   const canvasB = document.createElement('canvas');
   canvasB.width = w; canvasB.height = h;
@@ -130,7 +135,10 @@ function normalizeToSameSize(
   // Draw b centred
   const tmpB = document.createElement('canvas');
   tmpB.width = b.width; tmpB.height = b.height;
-  tmpB.getContext('2d')!.putImageData(new ImageData(b.data, b.width, b.height), 0, 0);
+  const ctxTmpB = tmpB.getContext('2d')!;
+  const imageDataB = new ImageData(b.width, b.height);
+  imageDataB.data.set(b.data);
+  ctxTmpB.putImageData(imageDataB, 0, 0);
   const dx = Math.round((w - b.width) / 2);
   const dy = Math.round((h - b.height) / 2);
   ctxB.drawImage(tmpB, dx, dy);
@@ -144,17 +152,32 @@ function normalizeToSameSize(
 function compareImageData(a: ImageData, b: ImageData): number {
   const len = a.data.length;
   let diff = 0;
-  const total = len / 4;
+  let relevantPixels = 0;
 
   for (let i = 0; i < len; i += 4) {
-    const dr = Math.abs(a.data[i]   - b.data[i]);
-    const dg = Math.abs(a.data[i+1] - b.data[i+1]);
-    const db = Math.abs(a.data[i+2] - b.data[i+2]);
-    // Tolerance: 20 per channel sum — handles subpixel/antialiasing differences
-    if (dr + dg + db > 20) diff++;
+    const ar = a.data[i], ag = a.data[i+1], ab = a.data[i+2];
+    const br = b.data[i], bg = b.data[i+1], bb = b.data[i+2];
+
+    const dr = Math.abs(ar - br);
+    const dg = Math.abs(ag - bg);
+    const db = Math.abs(ab - bb);
+    
+    const isDiff = (dr + dg + db > 20);
+
+    // Background color is #111827 (rgb: 17, 24, 39)
+    const aIsBg = Math.abs(ar - 17) + Math.abs(ag - 24) + Math.abs(ab - 39) <= 20;
+    const bIsBg = Math.abs(br - 17) + Math.abs(bg - 24) + Math.abs(bb - 39) <= 20;
+
+    // Only count pixels that are not background in at least one of the images
+    if (!aIsBg || !bIsBg) {
+      relevantPixels++;
+      if (isDiff) diff++;
+    }
   }
 
-  return Math.max(0, Math.min(100, Math.round((1 - diff / total) * 100)));
+  if (relevantPixels === 0) return 100; // Both are completely empty/background
+
+  return Math.max(0, Math.min(100, Math.round((1 - diff / relevantPixels) * 100)));
 }
 
 export async function pixelCompare(
